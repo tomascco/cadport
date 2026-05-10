@@ -5,7 +5,7 @@ $(BUILD_DIR)/$(BINARY): $(shell find . -name '*.go' -type f) go.mod
 	@mkdir -p $(BUILD_DIR)
 	go build -o $(BUILD_DIR)/$(BINARY) .
 
-.PHONY: build clean run
+.PHONY: build clean run run-fg stop
 build: $(BUILD_DIR)/$(BINARY)
 
 clean:
@@ -13,3 +13,9 @@ clean:
 
 run: build
 	$(BUILD_DIR)/$(BINARY) run
+
+run-fg: build
+	$(BUILD_DIR)/$(BINARY) run --foreground
+
+stop: build
+	$(BUILD_DIR)/$(BINARY) stop
