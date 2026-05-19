@@ -5,8 +5,22 @@ Dynamic port-to-subdomain forwarder for Caddy. Automatically detects local liste
 ## Prerequisites
 
 - Go 1.26+
-- Caddy running with a wildcard server configured for `*.local.tomascco.dev`
+- Caddy running with:
+  1. Wildcard server configured for or your subdomain;
+  2. TLS for your subdomain.
 - Caddy admin API accessible at `http://localhost:2019`
+- Port forwarding, VPN, Tailscale. Make sure the subdomain is private and accessible.
+
+Example caddy configuration:
+
+```Caddyfile
+*.subdomain.domain.com {
+	tls {
+	    dns cloudflare cfut_TOKEN
+        resolvers 1.1.1.1
+    }
+}
+```
 
 ## Installation
 

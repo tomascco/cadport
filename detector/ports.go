@@ -25,7 +25,7 @@ var excludedProcesses = map[string]bool{
 	"exe":      true,
 }
 
-func DetectPorts(selfPID int) ([]PortInfo, error) {
+func DetectPorts(selfPID int, extraPorts map[int]bool, extraProcs map[string]bool) ([]PortInfo, error) {
 	inodeToPID, err := buildInodePIDMap()
 	if err != nil {
 		return nil, fmt.Errorf("build inode map: %w", err)
@@ -60,10 +60,10 @@ func DetectPorts(selfPID int) ([]PortInfo, error) {
 		if err != nil {
 			continue
 		}
-		if strings.HasPrefix(procName, "caddy") || pid == selfPID || excludedProcesses[procName] {
+		if strings.HasPrefix(procName, "caddy") || pid == selfPID || excludedProcesses[procName] || extraProcs[procName] {
 			continue
 		}
-		if li.port < 1024 || excludedPorts[li.port] {
+		if li.port < 1024 || excludedPorts[li.port] || extraPorts[li.port] {
 			continue
 		}
 		results = append(results, PortInfo{

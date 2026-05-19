@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -33,6 +34,35 @@ const (
 	readyTimeout = 5 * time.Second
 )
 
+type runConfig struct {
+	Domain          string
+	ExtraBlockPorts []int
+	ExtraBlockProcs []string
+}
+
+type stringSliceFlag []string
+
+func (s *stringSliceFlag) String() string     { return strings.Join(*s, ",") }
+func (s *stringSliceFlag) Set(v string) error { *s = append(*s, v); return nil }
+
+type intSliceFlag []int
+
+func (s *intSliceFlag) String() string {
+	parts := make([]string, len(*s))
+	for i, v := range *s {
+		parts[i] = strconv.Itoa(v)
+	}
+	return strings.Join(parts, ",")
+}
+func (s *intSliceFlag) Set(v string) error {
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return err
+	}
+	*s = append(*s, n)
+	return nil
+}
+
 func main() {
 	if os.Getenv(daemonEnv) == "1" {
 		runChild()
@@ -44,17 +74,17 @@ func main() {
 	}
 	switch os.Args[1] {
 	case "run":
-		foreground := false
-		for _, a := range os.Args[2:] {
-			if a == "--foreground" || a == "-f" {
-				foreground = true
-			}
+		cfg, foreground, err := parseRunFlags(os.Args[2:])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cadport: %v\n", err)
+			usage()
+			os.Exit(1)
 		}
 		if foreground {
-			runForeground()
+			runForeground(cfg)
 			return
 		}
-		if err := daemonize(); err != nil {
+		if err := daemonize(os.Args[2:]); err != nil {
 			fmt.Fprintf(os.Stderr, "cadport: %v\n", err)
 			os.Exit(1)
 		}
@@ -67,10 +97,43 @@ func main() {
 	}
 }
 
+func filterForegroundFlag(args []string) []string {
+	out := make([]string, 0, len(args))
+	for _, a := range args {
+		if a == "--foreground" || a == "-f" {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+func parseRunFlags(args []string) (runConfig, bool, error) {
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	domain := fs.String("domain", "", "wildcard host suffix to match (required), e.g. local.example.dev")
+	var blockPorts intSliceFlag
+	var blockProcs stringSliceFlag
+	fs.Var(&blockPorts, "block-port", "additional port to exclude (repeatable)")
+	fs.Var(&blockProcs, "block-process", "additional process name to exclude (repeatable)")
+	foregroundLong := fs.Bool("foreground", false, "run in foreground")
+	foregroundShort := fs.Bool("f", false, "run in foreground (shorthand)")
+	if err := fs.Parse(args); err != nil {
+		return runConfig{}, false, err
+	}
+	if *domain == "" {
+		return runConfig{}, false, fmt.Errorf("--domain is required")
+	}
+	return runConfig{
+		Domain:          *domain,
+		ExtraBlockPorts: []int(blockPorts),
+		ExtraBlockProcs: []string(blockProcs),
+	}, *foregroundLong || *foregroundShort, nil
+}
+
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: cadport <command>")
 	fmt.Fprintln(os.Stderr, "commands:")
-	fmt.Fprintln(os.Stderr, "  run [--foreground]   start daemon (default backgrounds)")
+	fmt.Fprintln(os.Stderr, "  run --domain <suffix> [--block-port N]... [--block-process NAME]... [--foreground]")
 	fmt.Fprintln(os.Stderr, "  stop                 signal all running instances")
 }
 
@@ -81,13 +144,17 @@ type portState struct {
 	removeCount int
 }
 
-func runForeground() {
+func runForeground(cfg runConfig) {
 	log.Printf("cadport started (pid=%d)", os.Getpid())
-	runCore(func(err error) error { return nil })
+	runCore(cfg, func(err error) error { return nil })
 }
 
 func runChild() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	cfg, _, err := parseRunFlags(os.Args[2:])
+	if err != nil {
+		log.Fatalf("parse flags: %v", err)
+	}
 	readyPipe := os.NewFile(readyFD, "ready")
 	pidPath := pidFilePath()
 	defer removePidFile(pidPath)
@@ -105,7 +172,7 @@ func runChild() {
 		readyPipe = nil
 	}
 
-	runCore(func(err error) error {
+	runCore(cfg, func(err error) error {
 		if err != nil {
 			signalReady(false)
 			return nil
@@ -119,11 +186,20 @@ func runChild() {
 	})
 }
 
-func runCore(ready func(error) error) {
+func runCore(cfg runConfig, ready func(error) error) {
 	selfPID := os.Getpid()
 	log.Printf("cadport runCore (pid=%d)", selfPID)
 
-	caddyClient := caddy.NewClient(caddyAddr)
+	caddyClient := caddy.NewClient(caddyAddr, cfg.Domain)
+
+	extraBlockPorts := make(map[int]bool, len(cfg.ExtraBlockPorts))
+	for _, p := range cfg.ExtraBlockPorts {
+		extraBlockPorts[p] = true
+	}
+	extraBlockProcs := make(map[string]bool, len(cfg.ExtraBlockProcs))
+	for _, n := range cfg.ExtraBlockProcs {
+		extraBlockProcs[n] = true
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -180,7 +256,7 @@ func runCore(ready func(error) error) {
 		log.Printf("startup cleanup removed %s", id)
 	}
 
-	initialDetected, err := detector.DetectPorts(selfPID)
+	initialDetected, err := detector.DetectPorts(selfPID, extraBlockPorts, extraBlockProcs)
 	if err != nil {
 		log.Printf("initial detect: %v", err)
 	}
@@ -216,7 +292,7 @@ func runCore(ready func(error) error) {
 			srv.Shutdown(cleanupCtx)
 			return
 		case <-ticker.C:
-			detected, err := detector.DetectPorts(selfPID)
+			detected, err := detector.DetectPorts(selfPID, extraBlockPorts, extraBlockProcs)
 			if err != nil {
 				log.Printf("detect: %v", err)
 				continue
@@ -270,7 +346,7 @@ func runCore(ready func(error) error) {
 	}
 }
 
-func daemonize() error {
+func daemonize(runArgs []string) error {
 	pidPath := pidFilePath()
 	if existing, err := readPidFile(pidPath); err == nil {
 		if pidAlive(existing) {
@@ -299,9 +375,10 @@ func daemonize() error {
 		return fmt.Errorf("pipe: %w", err)
 	}
 
+	childArgs := append([]string{exe, "run"}, filterForegroundFlag(runArgs)...)
 	cmd := exec.Cmd{
 		Path:        exe,
-		Args:        []string{exe, "run"},
+		Args:        childArgs,
 		Env:         append(os.Environ(), daemonEnv+"=1"),
 		Stdin:       nil,
 		Stdout:      logFile,

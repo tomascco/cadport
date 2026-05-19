@@ -12,14 +12,16 @@ import (
 )
 
 type Client struct {
-	addr string
-	hc   *http.Client
+	addr   string
+	domain string
+	hc     *http.Client
 }
 
-func NewClient(addr string) *Client {
+func NewClient(addr, domain string) *Client {
 	return &Client{
-		addr: addr,
-		hc:   &http.Client{},
+		addr:   addr,
+		domain: domain,
+		hc:     &http.Client{},
 	}
 }
 
@@ -58,18 +60,18 @@ func (c *Client) DiscoverServer(ctx context.Context) (string, error) {
 					if !ok {
 						continue
 					}
-					if strings.HasSuffix(host, ".local.tomascco.dev") {
+					if strings.HasSuffix(host, "."+c.domain) {
 						return name, nil
 					}
 				}
 			}
 		}
 	}
-	return "", fmt.Errorf("no server with .local.tomascco.dev host matcher found")
+	return "", fmt.Errorf("no server with .%s host matcher found", c.domain)
 }
 
 func (c *Client) AddRoute(ctx context.Context, srvName string, port int) error {
-	host := fmt.Sprintf("%d.local.tomascco.dev", port)
+	host := fmt.Sprintf("%d.%s", port, c.domain)
 	route := map[string]interface{}{
 		"match": []interface{}{
 			map[string]interface{}{
