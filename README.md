@@ -1,6 +1,6 @@
 # cadport
 
-Dynamic port-to-subdomain forwarder for Caddy. Automatically detects local listening ports and creates reverse proxy routes to make them accessible via `{port}.local.tomascco.dev` on a Tailscale network. Currently the setup is hardcoded for my domain, but if you are interested, you may send PRs to make things configurable.
+Dynamic port-to-subdomain forwarder for Caddy. Automatically detects local listening ports and creates reverse proxy routes to make them accessible via `{port}.example.com` on a Tailscale network. Currently the setup is hardcoded for my domain, but if you are interested, you may send PRs to make things configurable.
 
 ## Prerequisites
 
